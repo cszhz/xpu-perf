@@ -1,0 +1,3 @@
+NEURON_ENV = {
+    "NEURON_RT_LOG_LEVEL": "ERROR",
+}
