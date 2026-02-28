@@ -72,9 +72,9 @@ Flash attention uses the **NKI (Neuron Kernel Interface)** `flash_fwd` kernel fr
 
 Tested on **inf2.8xlarge** with Neuron SDK 2.x, torch-neuronx 2.9.0, neuronx-cc 2.22.
 
-### Verified passing (22 ops)
+### Verified passing (23 ops)
 
-All basic compute ops and GEMM with 3 dtypes:
+All basic compute ops, GEMM with 3 dtypes, and embedding:
 
 | Op | Dtype | Shape | Latency | Metric |
 |---|---|---|---|---|
@@ -99,18 +99,19 @@ All basic compute ops and GEMM with 3 dtypes:
 | cos | fp32 | 1024x1024 | 1,683 us | - |
 | sin | fp32 | 1024x1024 | 1,701 us | - |
 | add | bf16 | 1024x1024 | 2,695 us | - |
+| embedding | bf16 | 1024x1024 | - | - |
 
-### Not yet tested — pending XLA compilation (30 ops)
+### Not yet tested — pending XLA compilation (29 ops)
 
 These ops all **load successfully** (51/51 ops confirmed) but have not been benchmarked
 because each new tensor shape requires **5-15 minutes of neuronx-cc compilation** on
-inf2. With ~30 untested ops, compilation takes 3-5 hours total. Once compiled, results
+inf2. With ~29 untested ops, compilation takes 3-5 hours total. Once compiled, results
 are cached in `/var/tmp/neuron-compile-cache/` and subsequent runs are fast.
 
 | Category | Ops | How to test |
 |---|---|---|
 | Vector Linear (1) | cast | `--task cast --device 0` |
-| Index ops (5) | embedding, gather, index_select, scatter, index_add | `--task embedding,gather,index_select,scatter,index_add --device 0` |
+| Index ops (4) | gather, index_select, scatter, index_add | `--task gather,index_select,scatter,index_add --device 0` |
 | LLM ops (16) | add_rms_norm, add_rms_norm_dynamic_quant, scale_dynamic_quant, swiglu_dynamic_quant, moe_gating_gemm, moe_softmax_topk, moe_scatter_dynamic_quant, quant_matmul, moe_quant_group_gemm, moe_gather, head_rms_norm, head_rms_norm_dynamic_quant, rotary_embedding, store_kv_cache, dequant_kv_cache, flash_attention | Use workloads under `workloads/llm/test_ops/` |
 | XCCL (8) | all_reduce, reduce_scatter, all_gather, all_to_all, broadcast, p2p, host2device, device2host, device2device | `--task all_reduce --device 0,1` (needs 2+ NeuronCores) |
 
