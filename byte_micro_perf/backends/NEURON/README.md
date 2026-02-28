@@ -164,6 +164,18 @@ find /var/tmp/neuron-compile-cache -name "*.neff" | wc -l
    parent process — it grabs NeuronCores via PJRT init. Deferred to `set_device()` which
    runs only in child subprocesses.
 
+5. **XCCL ops deadlock**: The XCCLEngine uses `dist.all_gather_object()` (line 565 in
+   `core/backend.py`) to synchronize tasks across ranks. This requires the **gloo** backend,
+   but Neuron initializes `dist.init_process_group(backend="xla")` which does not support
+   `all_gather_object`. Both ranks hang on this call, causing a deadlock. Fix requires
+   initializing a separate gloo process group for object communication, or replacing
+   `all_gather_object` with an XLA-compatible broadcast mechanism.
+
+6. **Quantization ops unsupported**: 8 LLM ops require int8/fp8 dtype tensors which Neuron
+   XLA does not support: scale_dynamic_quant, add_rms_norm_dynamic_quant,
+   head_rms_norm_dynamic_quant, swiglu_dynamic_quant, moe_scatter_dynamic_quant,
+   quant_matmul, moe_quant_group_gemm, dequant_kv_cache.
+
 ## Architecture Notes
 
 ### XLA Compilation
