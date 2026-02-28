@@ -171,6 +171,17 @@ class BackendNEURON(Backend):
     def get_dist_backend(self):
         return "xla"
 
+    def op_group_barrier(self, op_group=None, group_size=1):
+        import torch_xla.core.xla_model as xm
+        if dist.is_initialized() and group_size > 1:
+            dist.all_reduce(
+                torch.tensor([1], dtype=torch.int32, device=self.get_torch_device_name()),
+                op=dist.ReduceOp.SUM,
+                group=op_group
+            )
+            xm.mark_step()
+            xm.wait_device_ops()
+
     # ── core_perf override ────────────────────────────
 
     def core_perf(

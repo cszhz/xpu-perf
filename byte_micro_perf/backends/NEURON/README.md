@@ -118,17 +118,16 @@ All basic compute ops, GEMM with 3 dtypes, index ops, transfers, and LLM ops:
 | moe_gather | bf16 | 128x4096 8e top2 | 662 us | 11.1 GB/s |
 | flash_attention | bf16 | 2048 seq, 8h MHA prefill (nki) | 994 us | 8.6 TFLOPS |
 
-### Not yet tested (14 ops)
+### Blocked ops (14 ops)
 
-These ops all **load successfully** (51/51 ops confirmed) but have not been benchmarked
-because each new tensor shape requires **5-15 minutes of neuronx-cc compilation** on
-inf2. Remaining ops are blocked by Neuron limitations (int8/fp8 or distributed backend). Once compiled, results
-are cached in `/var/tmp/neuron-compile-cache/` and subsequent runs are fast.
+These ops load successfully but cannot be benchmarked due to Neuron platform limitations.
 
-| Category | Ops | How to test |
+| Category | Ops | Blocker |
 |---|---|---|
-| LLM quant ops (8) | scale_dynamic_quant, add_rms_norm_dynamic_quant, head_rms_norm_dynamic_quant, swiglu_dynamic_quant, moe_scatter_dynamic_quant, quant_matmul, moe_quant_group_gemm, dequant_kv_cache | Require int8/fp8 dtype (see known issue #6) |
-| XCCL (6) | all_reduce, reduce_scatter, all_gather, all_to_all, broadcast, p2p | `--task all_reduce --device 0,1` (needs 2+ NeuronCores) |
+| LLM quant ops (8) | scale_dynamic_quant, add_rms_norm_dynamic_quant, head_rms_norm_dynamic_quant, swiglu_dynamic_quant, moe_scatter_dynamic_quant, quant_matmul, moe_quant_group_gemm, dequant_kv_cache | Require int8/fp8 dtype, unsupported on Neuron XLA (see #7) |
+| XCCL (4) | all_reduce, reduce_scatter, all_gather, broadcast | Primitives verified working standalone; blocked by framework `all_gather_object` deadlock (see #5) |
+| XCCL (1) | all_to_all | Requires Mesh algorithm, needs multi-NeuronDevice instance (see #6) |
+| XCCL (1) | p2p | Requires multi-NeuronDevice instance for send/recv |
 
 ### How to resume testing
 
@@ -165,14 +164,20 @@ find /var/tmp/neuron-compile-cache -name "*.neff" | wc -l
    parent process — it grabs NeuronCores via PJRT init. Deferred to `set_device()` which
    runs only in child subprocesses.
 
-5. **XCCL ops deadlock**: The XCCLEngine uses `dist.all_gather_object()` (line 565 in
-   `core/backend.py`) to synchronize tasks across ranks. This requires the **gloo** backend,
-   but Neuron initializes `dist.init_process_group(backend="xla")` which does not support
-   `all_gather_object`. Both ranks hang on this call, causing a deadlock. Fix requires
-   initializing a separate gloo process group for object communication, or replacing
-   `all_gather_object` with an XLA-compatible broadcast mechanism.
+5. **XCCL ops framework deadlock**: The XCCLEngine uses `dist.all_gather_object()` in
+   `core/backend.py` to synchronize tasks across ranks. The XLA backend routes this through
+   NeuronCore lazy execution which hangs (no `xm.mark_step()` inside). Standalone testing
+   confirmed that **all_reduce, reduce_scatter, all_gather, broadcast** all work correctly
+   on Neuron XLA using `xm.rendezvous()` for object exchange instead. Fix: override
+   `xccl_infer_loop` in BackendNEURON to replace `dist.all_gather_object` with
+   `xm.rendezvous` + pickle, and add `xm.mark_step()`/`xm.wait_device_ops()` after
+   `op_group_barrier`.
 
-6. **Quantization ops unsupported**: 8 LLM ops require int8/fp8 dtype tensors which Neuron
+6. **all_to_all on single NeuronDevice**: `all_to_all` requires Mesh algorithm which is
+   not supported when all ranks are on the same NeuronDevice (e.g., inf2.8xlarge has 2
+   NeuronCores on 1 device). Needs multi-device instances (inf2.24xlarge+, trn1.32xlarge).
+
+7. **Quantization ops unsupported**: 8 LLM ops require int8/fp8 dtype tensors which Neuron
    XLA does not support: scale_dynamic_quant, add_rms_norm_dynamic_quant,
    head_rms_norm_dynamic_quant, swiglu_dynamic_quant, moe_scatter_dynamic_quant,
    quant_matmul, moe_quant_group_gemm, dequant_kv_cache.
