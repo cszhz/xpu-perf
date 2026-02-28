@@ -73,7 +73,7 @@ Flash attention uses the **NKI (Neuron Kernel Interface)** `flash_fwd` kernel fr
 
 Tested on **inf2.8xlarge** with Neuron SDK 2.x, torch-neuronx 2.9.0, neuronx-cc 2.22.
 
-### Verified passing (39 ops)
+### Verified passing (42 ops)
 
 All basic compute ops, GEMM with 3 dtypes, index ops, transfers, and LLM ops:
 
@@ -117,15 +117,18 @@ All basic compute ops, GEMM with 3 dtypes, index ops, transfers, and LLM ops:
 | store_kv_cache | bf16 | 128x8x128 prefill | 629 us | 1.7 GB/s |
 | moe_gather | bf16 | 128x4096 8e top2 | 662 us | 11.1 GB/s |
 | flash_attention | bf16 | 2048 seq, 8h MHA prefill (nki) | 994 us | 8.6 TFLOPS |
+| all_reduce | bf16 | 1024x1024 2-core | 41 us | 51.3 GB/s |
+| reduce_scatter | bf16 | 1024x1024 2-core | - | - |
+| broadcast | bf16 | 1024x1024 2-core | - | - |
 
-### Blocked ops (14 ops)
+### Blocked ops (11 ops)
 
 These ops load successfully but cannot be benchmarked due to Neuron platform limitations.
 
 | Category | Ops | Blocker |
 |---|---|---|
 | LLM quant ops (8) | scale_dynamic_quant, add_rms_norm_dynamic_quant, head_rms_norm_dynamic_quant, swiglu_dynamic_quant, moe_scatter_dynamic_quant, quant_matmul, moe_quant_group_gemm, dequant_kv_cache | Require int8/fp8 dtype, unsupported on Neuron XLA (see #7) |
-| XCCL (4) | all_reduce, reduce_scatter, all_gather, broadcast | Primitives verified working standalone; blocked by framework `all_gather_object` deadlock (see #5) |
+| XCCL (1) | all_gather | `all_gather_into_tensor` shape incompatible with XLA backend |
 | XCCL (1) | all_to_all | Requires Mesh algorithm, needs multi-NeuronDevice instance (see #6) |
 | XCCL (1) | p2p | Requires multi-NeuronDevice instance for send/recv |
 
@@ -164,14 +167,11 @@ find /var/tmp/neuron-compile-cache -name "*.neff" | wc -l
    parent process — it grabs NeuronCores via PJRT init. Deferred to `set_device()` which
    runs only in child subprocesses.
 
-5. **XCCL ops framework deadlock**: The XCCLEngine uses `dist.all_gather_object()` in
-   `core/backend.py` to synchronize tasks across ranks. The XLA backend routes this through
-   NeuronCore lazy execution which hangs (no `xm.mark_step()` inside). Standalone testing
-   confirmed that **all_reduce, reduce_scatter, all_gather, broadcast** all work correctly
-   on Neuron XLA using `xm.rendezvous()` for object exchange instead. Fix: override
-   `xccl_infer_loop` in BackendNEURON to replace `dist.all_gather_object` with
-   `xm.rendezvous` + pickle, and add `xm.mark_step()`/`xm.wait_device_ops()` after
-   `op_group_barrier`.
+5. **XCCL ops framework deadlock (FIXED)**: The XCCLEngine used `dist.all_gather_object()`
+   which hangs on XLA backend. Fixed by overriding `xccl_infer_loop` and `perf` in
+   BackendNEURON: replaced `all_gather_object` with `_broadcast_object` (XLA broadcast +
+   pickle) for task distribution and `_gather_objects` (XLA all_gather + pickle) for result
+   collection. Also overrode `op_group_barrier` with `xm.mark_step()`/`xm.wait_device_ops()`.
 
 6. **all_to_all on single NeuronDevice**: `all_to_all` requires Mesh algorithm which is
    not supported when all ranks are on the same NeuronDevice (e.g., inf2.8xlarge has 2
