@@ -47,13 +47,12 @@ python launch.py --backend NEURON --task all_reduce
 | Vector Reduction (4) | reduce_max, reduce_min, reduce_sum, topk | torch |
 | Vector Norm (3) | layer_norm, rms_norm, softmax | torch |
 | Vector Activation (2) | gelu, silu | torch |
-| Vector Index (6) | embedding, gather, index_select, scatter, index_add, device2device | torch |
+| Vector Index (5) | embedding, gather, index_select, scatter, index_add | torch |
 | Tensor GEMM (1) | gemm (float32, float16, bfloat16) | torch |
 | LLM Basic (3) | scale_dynamic_quant, add_rms_norm_dynamic_quant, add_rms_norm | torch |
 | LLM MOE (8) | moe_gating_gemm, moe_softmax_topk, moe_scatter_dynamic_quant, quant_matmul, moe_quant_group_gemm, moe_swiglu_dynamic_quant, swiglu_dynamic_quant, moe_gather | torch |
 | LLM Attention (6) | head_rms_norm, head_rms_norm_dynamic_quant, rotary_embedding, store_kv_cache, dequant_kv_cache, flash_attention | torch / nki |
-| XCCL (6) | all_reduce, reduce_scatter, all_gather, all_to_all, broadcast, p2p | torch |
-| Host/Device (2) | host2device, device2host | torch |
+| XCCL (9) | all_reduce, reduce_scatter, all_gather, all_to_all, broadcast, p2p, host2device, device2host, device2device | torch |
 
 ### Flash Attention
 
@@ -101,19 +100,19 @@ All basic compute ops and GEMM with 3 dtypes:
 | sin | fp32 | 1024x1024 | 1,701 us | - |
 | add | bf16 | 1024x1024 | 2,695 us | - |
 
-### Not yet tested — pending XLA compilation (29 ops)
+### Not yet tested — pending XLA compilation (30 ops)
 
 These ops all **load successfully** (51/51 ops confirmed) but have not been benchmarked
 because each new tensor shape requires **5-15 minutes of neuronx-cc compilation** on
-inf2. With ~29 untested ops, compilation takes 3-5 hours total. Once compiled, results
+inf2. With ~30 untested ops, compilation takes 3-5 hours total. Once compiled, results
 are cached in `/var/tmp/neuron-compile-cache/` and subsequent runs are fast.
 
 | Category | Ops | How to test |
 |---|---|---|
-| Index ops (6) | cast, embedding, gather, index_select, scatter, index_add | `--task cast,embedding,gather,index_select,scatter,index_add --device 0` |
+| Vector Linear (1) | cast | `--task cast --device 0` |
+| Index ops (5) | embedding, gather, index_select, scatter, index_add | `--task embedding,gather,index_select,scatter,index_add --device 0` |
 | LLM ops (16) | add_rms_norm, add_rms_norm_dynamic_quant, scale_dynamic_quant, swiglu_dynamic_quant, moe_gating_gemm, moe_softmax_topk, moe_scatter_dynamic_quant, quant_matmul, moe_quant_group_gemm, moe_gather, head_rms_norm, head_rms_norm_dynamic_quant, rotary_embedding, store_kv_cache, dequant_kv_cache, flash_attention | Use workloads under `workloads/llm/test_ops/` |
-| XCCL (5) | all_reduce, reduce_scatter, all_gather, all_to_all, broadcast | `--task all_reduce --device 0,1` (needs 2+ NeuronCores) |
-| Transfers + P2P (3) | host2device, device2host, p2p | P2P needs multi-core; transfers use XCCL engine |
+| XCCL (8) | all_reduce, reduce_scatter, all_gather, all_to_all, broadcast, p2p, host2device, device2host, device2device | `--task all_reduce --device 0,1` (needs 2+ NeuronCores) |
 
 ### How to resume testing
 
