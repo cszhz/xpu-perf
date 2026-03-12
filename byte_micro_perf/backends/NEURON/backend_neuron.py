@@ -497,20 +497,36 @@ class BackendNEURON(Backend):
 
         # Warmup -- extra iterations to absorb XLA compilation
         effective_warmup = max(warmup_iterations, 4)
-        for i in range(effective_warmup):
-            op_instance.core_run(tensor_list[i % len(tensor_list)])
-            xm.mark_step()
-        xm.wait_device_ops()
+        try:
+            for i in range(effective_warmup):
+                op_instance.core_run(tensor_list[i % len(tensor_list)])
+                xm.mark_step()
+            xm.wait_device_ops()
+        except Exception:
+            # Clear any pending lazy ops so that peer ranks participating in
+            # collective ops are not left blocked on this rank forever.
+            try:
+                xm.mark_step()
+            except Exception:
+                pass
+            raise
 
         # Timed iterations
         self.op_group_barrier(op_group=op_group, group_size=group_size)
         xm.wait_device_ops()
 
         start_time = time.perf_counter_ns()
-        for i in range(prefer_iterations):
-            op_instance.core_run(tensor_list[i % len(tensor_list)])
-            xm.mark_step()  # reuse the 1-op HLO compiled during warmup
-        xm.wait_device_ops()
+        try:
+            for i in range(prefer_iterations):
+                op_instance.core_run(tensor_list[i % len(tensor_list)])
+                xm.mark_step()  # reuse the 1-op HLO compiled during warmup
+            xm.wait_device_ops()
+        except Exception:
+            try:
+                xm.mark_step()
+            except Exception:
+                pass
+            raise
         end_time = time.perf_counter_ns()
 
         latency_us = (end_time - start_time) / 1e3 / prefer_iterations
